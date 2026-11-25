@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-  <title>即時掃碼 → 「掃碼」工作頁</title>
-  <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+  <title>即時掃碼 → 「掃碼」工作頁 v1.3</title>
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
   <style>
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -18,14 +18,33 @@
       margin: 8px 0 12px;
       font-size: 18px;
     }
-    #reader {
+    h3 small {
+      font-size: 13px;
+      font-weight: 600;
+      color: #1a73e8;
+      background: #e8f0fe;
+      padding: 2px 7px;
+      border-radius: 999px;
+      vertical-align: middle;
+    }
+    .cam-box {
+      position: relative;
       width: 100%;
       max-width: 400px;
+      height: 260px;
       margin: 0 auto;
       border-radius: 10px;
       overflow: hidden;
       background: #000;
-      min-height: 240px;
+    }
+    video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    canvas {
+      display: none;
     }
     .card {
       max-width: 400px;
@@ -62,12 +81,16 @@
 </head>
 <body>
 
-  <h3>即時掃碼 → 「掃碼」工作頁v1.2</h3>
-  <div id="reader"></div>
+  <h3>即時掃碼 → 「掃碼」工作頁 <small>v1.3</small></h3>
+
+  <div class="cam-box">
+    <video id="camVideo" playsinline autoplay muted></video>
+    <canvas id="scanCanvas"></canvas>
+  </div>
 
   <div class="card">
     <div class="label">目前狀態</div>
-    <div id="statusText">正在準備相機...</div>
+    <div id="statusText">正在啟動後置鏡頭...</div>
   </div>
 
   <div class="card">
@@ -75,27 +98,19 @@
     <div id="decodedText">尚未掃描</div>
   </div>
 
-  <button id="rescanBtn" type="button" style="display:none;" onclick="restartScanner()">重新掃描</button>
+  <button id="rescanBtn" type="button" style="display:none;" onclick="startScanLoop()">重新掃描</button>
 
   <script>
-    // 請替換為你的 GAS 部署網址（結尾為 /exec）
     const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzzXcNmdnuV_4IswcQeBKb26_UZg4SSuOIPk1-5qVlfhDth-HTygod6PR7TDtOym5PFrw/exec';
 
-    const html5QrCode = new Html5Qrcode("reader");
+    const videoEl = document.getElementById('camVideo');
+    const canvasEl = document.getElementById('scanCanvas');
+    const ctx = canvasEl.getContext('2d', { willReadFrequently: true });
+
+    let mediaStream = null;
+    let rafId = null;
     let isScanning = false;
-    let isTransitioning = false;
     let isSending = false;
-    let hasBooted = false;
-
-    const scanConfig = {
-      fps: 10,
-      qrbox: { width: 240, height: 240 },
-      aspectRatio: 1.0
-    };
-
-    function sleep(ms) {
-      return new Promise(resolve => setTimeout(resolve, ms));
-    }
 
     function setStatus(msg) {
       document.getElementById('statusText').innerText = msg;
@@ -118,78 +133,94 @@
       return 'Other';
     }
 
-    async function stopScanner() {
-      if (isTransitioning) {
-        while (isTransitioning) {
-          await sleep(80);
-        }
-      }
-      if (!isScanning) return;
-
-      isTransitioning = true;
-      try {
-        await html5QrCode.stop();
-        await sleep(150);
-      } catch (e) {
-        // 忽略重複停止或尚未完全啟動的例外
-      } finally {
-        isScanning = false;
-        isTransitioning = false;
+    function stopScanLoop() {
+      isScanning = false;
+      if (rafId) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
       }
     }
 
-    async function startScanner() {
-      if (isSending) return;
+    function stopCameraStream() {
+      stopScanLoop();
+      if (mediaStream) {
+        mediaStream.getTracks().forEach(track => track.stop());
+        mediaStream = null;
+      }
+      videoEl.srcObject = null;
+    }
 
-      if (isTransitioning) {
-        while (isTransitioning) {
-          await sleep(80);
-        }
+    async function initCamera() {
+      stopCameraStream();
+      setRescanVisible(false);
+      setStatus('正在請求相機權限並啟動後置鏡頭...');
+
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        setStatus('此瀏覽器不支援相機串流');
+        setRescanVisible(true, false);
+        return;
       }
 
-      if (isScanning) return;
-
-      isTransitioning = true;
-      setRescanVisible(false);
-      setStatus('正在啟動後置鏡頭...');
-
       try {
-        await html5QrCode.start(
-          { facingMode: { ideal: "environment" } },
-          scanConfig,
-          onScanSuccess,
-          () => {}
-        );
-        await sleep(150);
-        isScanning = true;
-        setStatus('鏡頭已啟動，請對準 QR Code');
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: 'environment' } },
+          audio: false
+        });
       } catch (err) {
         try {
-          await sleep(200);
-          const cameras = await Html5Qrcode.getCameras();
-          if (!cameras || cameras.length === 0) {
-            throw new Error('找不到可用鏡頭');
-          }
-          const backCam = cameras.find(c => /back|rear|environment|後/i.test(c.label)) || cameras[cameras.length - 1];
-          await html5QrCode.start(backCam.id, scanConfig, onScanSuccess, () => {});
-          await sleep(150);
-          isScanning = true;
-          setStatus('鏡頭已啟動，請對準 QR Code');
+          mediaStream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: false
+          });
         } catch (fallbackErr) {
-          isScanning = false;
-          setStatus('無法啟動鏡頭：' + (fallbackErr.message || fallbackErr));
+          setStatus('無法啟動鏡頭：' + (fallbackErr.name || 'Error') + ' - ' + (fallbackErr.message || fallbackErr));
           setRescanVisible(true, false);
+          return;
         }
-      } finally {
-        isTransitioning = false;
       }
+
+      videoEl.srcObject = mediaStream;
+      await videoEl.play();
+      startScanLoop();
     }
 
-    async function onScanSuccess(decodedText) {
+    function startScanLoop() {
+      if (isSending) return;
+      stopScanLoop();
+      isScanning = true;
+      setRescanVisible(false);
+      setStatus('鏡頭已啟動，請對準 QR Code');
+
+      const tick = () => {
+        if (!isScanning || isSending) return;
+
+        if (videoEl.readyState === videoEl.HAVE_ENOUGH_DATA && videoEl.videoWidth > 0 && videoEl.videoHeight > 0) {
+          canvasEl.width = videoEl.videoWidth;
+          canvasEl.height = videoEl.videoHeight;
+          ctx.drawImage(videoEl, 0, 0, canvasEl.width, canvasEl.height);
+
+          const imageData = ctx.getImageData(0, 0, canvasEl.width, canvasEl.height);
+          const code = jsQR(imageData.data, imageData.width, imageData.height, {
+            inversionAttempts: 'attemptBoth'
+          });
+
+          if (code && code.data) {
+            handleDecoded(code.data);
+            return;
+          }
+        }
+
+        rafId = requestAnimationFrame(tick);
+      };
+
+      rafId = requestAnimationFrame(tick);
+    }
+
+    async function handleDecoded(decodedText) {
       if (isSending) return;
       isSending = true;
+      stopScanLoop();
 
-      await stopScanner();
       setDecoded(decodedText);
       setStatus('掃描成功，正在傳送至 GAS 寫入「掃碼」工作頁...');
 
@@ -212,24 +243,8 @@
       }
     }
 
-    async function restartScanner() {
-      if (isSending || isTransitioning) return;
-      setRescanVisible(true, true);
-      await stopScanner();
-      await sleep(150);
-      await startScanner();
-    }
-
-    window.addEventListener('DOMContentLoaded', async () => {
-      if (hasBooted) return;
-      hasBooted = true;
-      await sleep(200);
-      await startScanner();
-    });
-
-    window.addEventListener('beforeunload', () => {
-      stopScanner();
-    });
+    window.addEventListener('DOMContentLoaded', initCamera);
+    window.addEventListener('beforeunload', stopCameraStream);
   </script>
 </body>
 </html>
