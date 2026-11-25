@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>即時掃碼寫入「掃碼」工作頁</title>
+  <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      text-align: center;
+      padding: 16px;
+      margin: 0;
+      background: #f5f7fa;
+      color: #202124;
+    }
+    h3 {
+      margin: 8px 0 12px;
+      font-size: 18px;
+    }
+    #reader {
+      width: 100%;
+      max-width: 400px;
+      margin: 0 auto;
+      border-radius: 10px;
+      overflow: hidden;
+      background: #000;
+      min-height: 240px;
+    }
+    .card {
+      max-width: 400px;
+      margin: 14px auto 0;
+      padding: 12px;
+      background: #fff;
+      border: 1px solid #dadce0;
+      border-radius: 8px;
+      text-align: left;
+      font-size: 14px;
+      line-height: 1.5;
+      word-break: break-all;
+    }
+    .label {
+      font-size: 12px;
+      color: #5f6368;
+      margin-bottom: 4px;
+    }
+    button {
+      margin-top: 14px;
+      padding: 11px 22px;
+      font-size: 16px;
+      border: none;
+      border-radius: 8px;
+      background: #1a73e8;
+      color: #fff;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+
+  <h3>即時掃碼 → 「掃碼」工作頁</h3>
+  <div id="reader"></div>
+
+  <div class="card">
+    <div class="label">目前狀態</div>
+    <div id="statusText">正在啟動鏡頭...</div>
+  </div>
+
+  <div class="card">
+    <div class="label">最近解碼內容</div>
+    <div id="decodedText">尚未掃描</div>
+  </div>
+
+  <button id="rescanBtn" type="button" style="display:none;" onclick="restartScanner()">重新掃描</button>
+
+  <script>
+    // 請替換為你的 GAS 部署網址（結尾為 /exec）
+    const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzzXcNmdnuV_4IswcQeBKb26_UZg4SSuOIPk1-5qVlfhDth-HTygod6PR7TDtOym5PFrw/exec';
+
+    const html5QrCode = new Html5Qrcode("reader");
+    let isScanning = false;
+    let isSending = false;
+
+    const scanConfig = {
+      fps: 10,
+      qrbox: { width: 240, height: 240 },
+      aspectRatio: 1.0
+    };
+
+    function setStatus(msg) {
+      document.getElementById('statusText').innerText = msg;
+    }
+
+    function setDecoded(text) {
+      document.getElementById('decodedText').innerText = text;
+    }
+
+    function getDeviceInfo() {
+      const ua = navigator.userAgent || '';
+      if (/iPhone|iPad|iPod/i.test(ua)) return 'iOS';
+      if (/Android/i.test(ua)) return 'Android';
+      return 'Other';
+    }
+
+    async function startScanner() {
+      if (isScanning || isSending) return;
+      document.getElementById('rescanBtn').style.display = 'none';
+      setStatus('正在啟動後置鏡頭...');
+
+      try {
+        await html5QrCode.start(
+          { facingMode: { ideal: "environment" } },
+          scanConfig,
+          onScanSuccess,
+          () => {}
+        );
+        isScanning = true;
+        setStatus('鏡頭已啟動，請對準 QR Code');
+      } catch (err) {
+        try {
+          const cameras = await Html5Qrcode.getCameras();
+          if (!cameras || cameras.length === 0) {
+            throw new Error('找不到可用鏡頭');
+          }
+          const backCam = cameras.find(c => /back|rear|environment|後/i.test(c.label)) || cameras[cameras.length - 1];
+          await html5QrCode.start(backCam.id, scanConfig, onScanSuccess, () => {});
+          isScanning = true;
+          setStatus('鏡頭已啟動，請對準 QR Code');
+        } catch (fallbackErr) {
+          isScanning = false;
+          setStatus('無法啟動鏡頭：' + (fallbackErr.message || fallbackErr));
+          document.getElementById('rescanBtn').style.display = 'inline-block';
+        }
+      }
+    }
+
+    async function stopScanner() {
+      if (!isScanning) return;
+      try {
+        await html5QrCode.stop();
+      } catch (e) {}
+      finally {
+        isScanning = false;
+      }
+    }
+
+    async function onScanSuccess(decodedText) {
+      if (isSending) return;
+      isSending = true;
+
+      await stopScanner();
+      setDecoded(decodedText);
+      setStatus('掃描成功，正在傳送至 GAS 寫入「掃碼」工作頁...');
+
+      try {
+        await fetch(GAS_WEB_APP_URL, {
+          method: 'POST',
+          mode: 'no-cors',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({
+            decodedText: decodedText,
+            deviceInfo: getDeviceInfo()
+          })
+        });
+        setStatus('已送出資料，請至「掃碼」工作頁確認是否新增一列');
+      } catch (err) {
+        setStatus('傳送失敗：' + (err && err.message ? err.message : err));
+      } finally {
+        isSending = false;
+        document.getElementById('rescanBtn').style.display = 'inline-block';
+      }
+    }
+
+    async function restartScanner() {
+      if (isSending) return;
+      await stopScanner();
+      startScanner();
+    }
+
+    window.addEventListener('load', startScanner);
+    window.addEventListener('beforeunload', stopScanner);
+  </script>
+</body>
+</html>
