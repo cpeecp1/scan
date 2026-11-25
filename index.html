@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-  <title>即時掃碼寫入「掃碼」工作頁</title>
+  <title>即時掃碼 → 「掃碼」工作頁</title>
   <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
   <style>
     body {
@@ -54,6 +54,10 @@
       color: #fff;
       cursor: pointer;
     }
+    button:disabled {
+      background: #9ec1f5;
+      cursor: not-allowed;
+    }
   </style>
 </head>
 <body>
@@ -63,7 +67,7 @@
 
   <div class="card">
     <div class="label">目前狀態</div>
-    <div id="statusText">正在啟動鏡頭...</div>
+    <div id="statusText">正在準備相機...</div>
   </div>
 
   <div class="card">
@@ -79,13 +83,19 @@
 
     const html5QrCode = new Html5Qrcode("reader");
     let isScanning = false;
+    let isTransitioning = false;
     let isSending = false;
+    let hasBooted = false;
 
     const scanConfig = {
       fps: 10,
       qrbox: { width: 240, height: 240 },
       aspectRatio: 1.0
     };
+
+    function sleep(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
+    }
 
     function setStatus(msg) {
       document.getElementById('statusText').innerText = msg;
@@ -95,6 +105,12 @@
       document.getElementById('decodedText').innerText = text;
     }
 
+    function setRescanVisible(visible, disabled = false) {
+      const btn = document.getElementById('rescanBtn');
+      btn.style.display = visible ? 'inline-block' : 'none';
+      btn.disabled = disabled;
+    }
+
     function getDeviceInfo() {
       const ua = navigator.userAgent || '';
       if (/iPhone|iPad|iPod/i.test(ua)) return 'iOS';
@@ -102,9 +118,39 @@
       return 'Other';
     }
 
+    async function stopScanner() {
+      if (isTransitioning) {
+        while (isTransitioning) {
+          await sleep(80);
+        }
+      }
+      if (!isScanning) return;
+
+      isTransitioning = true;
+      try {
+        await html5QrCode.stop();
+        await sleep(150);
+      } catch (e) {
+        // 忽略重複停止或尚未完全啟動的例外
+      } finally {
+        isScanning = false;
+        isTransitioning = false;
+      }
+    }
+
     async function startScanner() {
-      if (isScanning || isSending) return;
-      document.getElementById('rescanBtn').style.display = 'none';
+      if (isSending) return;
+
+      if (isTransitioning) {
+        while (isTransitioning) {
+          await sleep(80);
+        }
+      }
+
+      if (isScanning) return;
+
+      isTransitioning = true;
+      setRescanVisible(false);
       setStatus('正在啟動後置鏡頭...');
 
       try {
@@ -114,33 +160,28 @@
           onScanSuccess,
           () => {}
         );
+        await sleep(150);
         isScanning = true;
         setStatus('鏡頭已啟動，請對準 QR Code');
       } catch (err) {
         try {
+          await sleep(200);
           const cameras = await Html5Qrcode.getCameras();
           if (!cameras || cameras.length === 0) {
             throw new Error('找不到可用鏡頭');
           }
           const backCam = cameras.find(c => /back|rear|environment|後/i.test(c.label)) || cameras[cameras.length - 1];
           await html5QrCode.start(backCam.id, scanConfig, onScanSuccess, () => {});
+          await sleep(150);
           isScanning = true;
           setStatus('鏡頭已啟動，請對準 QR Code');
         } catch (fallbackErr) {
           isScanning = false;
           setStatus('無法啟動鏡頭：' + (fallbackErr.message || fallbackErr));
-          document.getElementById('rescanBtn').style.display = 'inline-block';
+          setRescanVisible(true, false);
         }
-      }
-    }
-
-    async function stopScanner() {
-      if (!isScanning) return;
-      try {
-        await html5QrCode.stop();
-      } catch (e) {}
-      finally {
-        isScanning = false;
+      } finally {
+        isTransitioning = false;
       }
     }
 
@@ -167,18 +208,28 @@
         setStatus('傳送失敗：' + (err && err.message ? err.message : err));
       } finally {
         isSending = false;
-        document.getElementById('rescanBtn').style.display = 'inline-block';
+        setRescanVisible(true, false);
       }
     }
 
     async function restartScanner() {
-      if (isSending) return;
+      if (isSending || isTransitioning) return;
+      setRescanVisible(true, true);
       await stopScanner();
-      startScanner();
+      await sleep(150);
+      await startScanner();
     }
 
-    window.addEventListener('load', startScanner);
-    window.addEventListener('beforeunload', stopScanner);
+    window.addEventListener('DOMContentLoaded', async () => {
+      if (hasBooted) return;
+      hasBooted = true;
+      await sleep(200);
+      await startScanner();
+    });
+
+    window.addEventListener('beforeunload', () => {
+      stopScanner();
+    });
   </script>
 </body>
 </html>
