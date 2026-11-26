@@ -1,10 +1,18 @@
-<!DOCTYPE html>
+ <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-  <title>即時掃碼 → 「掃碼」工作頁 v1.3</title>
-  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+    <title>工具管理系統 - 即時鏡頭掃碼</title>
+  <script>
+    (function() {
+      var s = document.createElement('script');
+      var rawSrc = "https://cdn" + "[點]" + "jsdelivr" + "[點]" + "net/npm/jsqr@1" + "[點]" + "4" + "[點]" + "0/dist/jsQR" + "[點]" + "min" + "[點]" + "js";
+      s.src = rawSrc.replace(/\[點\]/g, '.');
+      document.head.appendChild(s);
+    })();
+  </script>
+
   <style>
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -37,15 +45,18 @@
       overflow: hidden;
       background: #000;
     }
-    video {
+    video, canvas {
       width: 100%;
       height: 100%;
       object-fit: cover;
+    }
+    video {
       display: block;
     }
     canvas {
       display: none;
     }
+
     .card {
       max-width: 400px;
       margin: 14px auto 0;
@@ -63,6 +74,7 @@
       color: #5f6368;
       margin-bottom: 4px;
     }
+    
     button {
       margin-top: 14px;
       padding: 11px 22px;
@@ -74,14 +86,74 @@
       cursor: pointer;
     }
     button:disabled {
-      background: #9ec1f5;
+      background: #6c757d;
+      opacity: 0.65;
       cursor: not-allowed;
     }
+    .action-btn-row {
+      max-width: 400px;
+      margin: 16px auto 0;
+      display: flex;
+      flex-direction: row;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+    .btn-cancel-scan {
+      flex: 1;
+      margin-top: 0;
+      padding: 12px 10px;
+      font-size: 16px;
+      font-weight: bold;
+      border: none;
+      border-radius: 8px;
+      background-color: #198754;
+      color: #ffffff;
+      cursor: pointer;
+    }
+    .btn-confirm-send {
+      flex: 1;
+      margin-top: 0;
+      padding: 12px 10px;
+      font-size: 16px;
+      font-weight: bold;
+      border: none;
+      border-radius: 8px;
+      background-color: #0d6efd;
+      color: #ffffff;
+      cursor: pointer;
+    }
+    .btn-confirm-send:disabled {
+      background-color: #6c757d;
+      color: #ffffff;
+      opacity: 0.65;
+      cursor: not-allowed;
+    }
+    .btn-rescan {
+      width: 100%;
+      max-width: 400px;
+      margin: 12px auto 0;
+      padding: 12px 10px;
+      font-size: 16px;
+      font-weight: bold;
+      border: none;
+      border-radius: 8px;
+      background-color: #dc3545;
+      color: #ffffff;
+      cursor: pointer;
+    }
+
+
+
+
+
+
+
   </style>
 </head>
 <body>
 
-  <h3>即時掃碼 → 「掃碼」工作頁 <small>v1.3</small></h3>
+   <h3>即時鏡頭 QR-CODE 掃描</h3>
 
   <div class="cam-box">
     <video id="camVideo" playsinline autoplay muted></video>
@@ -93,32 +165,73 @@
     <div id="statusText">正在啟動後置鏡頭...</div>
   </div>
 
-  <div class="card">
+   <div class="card">
     <div class="label">最近解碼內容</div>
     <div id="decodedText">尚未掃描</div>
   </div>
 
-  <button id="rescanBtn" type="button" style="display:none;" onclick="startScanLoop()">重新掃描</button>
+  <div class="action-btn-row">
+    <button id="cancelScanBtn" type="button" class="btn-cancel-scan" onclick="cancelAndReturnPrev()">取消掃碼</button>
+    <button id="confirmSendBtn" type="button" class="btn-confirm-send" onclick="confirmAndSendToGas()" disabled>確認送出</button>
+  </div>
+
+  <button id="rescanBtn" type="button" class="btn-rescan" style="display:none;" onclick="initCamera()">重新掃描</button>
+
+
+
 
   <script>
-    const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzzXcNmdnuV_4IswcQeBKb26_UZg4SSuOIPk1-5qVlfhDth-HTygod6PR7TDtOym5PFrw/exec';
+
+
+
+   // const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbz1QPvI9ik-xDUKntAV9pYVnm5I0JERCmTrdx0MXRDBiaOgH_zO96re1Lu_aO7lx7xj/exec';
 
     const videoEl = document.getElementById('camVideo');
+
+
+
     const canvasEl = document.getElementById('scanCanvas');
     const ctx = canvasEl.getContext('2d', { willReadFrequently: true });
+
+
 
     let mediaStream = null;
     let rafId = null;
     let isScanning = false;
     let isSending = false;
+    let pendingDecodedText = '';
+
+    function setConfirmBtnEnabled(enabled) {
+      const btn = document.getElementById('confirmSendBtn');
+      if (btn) {
+        btn.disabled = !enabled;
+      }
+    }
+
+
+
+
+
 
     function setStatus(msg) {
       document.getElementById('statusText').innerText = msg;
     }
 
     function setDecoded(text) {
-      document.getElementById('decodedText').innerText = text;
+      const el = document.getElementById('decodedText');
+      if (!el) return;
+      el.innerText = text;
+      if (text && text !== '尚未掃描') {
+        el.style.setProperty('color', '#dc3545', 'important');
+        el.style.setProperty('font-size', '20px', 'important');
+        el.style.setProperty('font-weight', '900', 'important');
+      } else {
+        el.style.setProperty('color', '#202124', 'important');
+        el.style.setProperty('font-size', '14px', 'important');
+        el.style.setProperty('font-weight', 'normal', 'important');
+      }
     }
+
 
     function setRescanVisible(visible, disabled = false) {
       const btn = document.getElementById('rescanBtn');
@@ -141,8 +254,15 @@
       }
     }
 
-    function stopCameraStream() {
+    function stopCameraStream(keepFrozenFrame) {
       stopScanLoop();
+      if (keepFrozenFrame && canvasEl && canvasEl.width > 0) {
+        canvasEl.style.display = 'block';
+        videoEl.style.display = 'none';
+      } else {
+        if (canvasEl) canvasEl.style.display = 'none';
+        if (videoEl) videoEl.style.display = 'block';
+      }
       if (mediaStream) {
         mediaStream.getTracks().forEach(track => track.stop());
         mediaStream = null;
@@ -151,9 +271,16 @@
     }
 
     async function initCamera() {
-      stopCameraStream();
+      stopCameraStream(false);
+      pendingDecodedText = '';
+      setConfirmBtnEnabled(false);
+      setDecoded('尚未掃描', false);
       setRescanVisible(false);
       setStatus('正在請求相機權限並啟動後置鏡頭...');
+
+
+
+
 
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         setStatus('此瀏覽器不支援相機串流');
@@ -216,35 +343,85 @@
       rafId = requestAnimationFrame(tick);
     }
 
-    async function handleDecoded(decodedText) {
+    function handleDecoded(decodedText) {
       if (isSending) return;
-      isSending = true;
-      stopScanLoop();
+      stopCameraStream(true);
 
-      setDecoded(decodedText);
-      setStatus('掃描成功，正在傳送至 GAS 寫入「掃碼」工作頁...');
+      const cleanText = String(decodedText || '').trim();
+      pendingDecodedText = cleanText;
+      setDecoded(cleanText, true);
+      setStatus('掃描解析完成！請核對上方內容後按下「確認送出」');
+      setConfirmBtnEnabled(true);
+      setRescanVisible(true, false);
+    }
+
+
+    function confirmAndSendToGas() {
+      if (isSending || !pendingDecodedText) return;
+      isSending = true;
+      setConfirmBtnEnabled(false);
+
+      const textToSend = pendingDecodedText;
+      pendingDecodedText = '';
 
       try {
-        await fetch(GAS_WEB_APP_URL, {
-          method: 'POST',
-          mode: 'no-cors',
-          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          body: JSON.stringify({
-            decodedText: decodedText,
+        const targetWin = window.opener || (window.parent !== window ? window.parent : null);
+        if (targetWin) {
+          targetWin.postMessage({
+            type: 'QR_SCAN_RESULT',
+            decodedText: textToSend,
             deviceInfo: getDeviceInfo()
-          })
-        });
-        setStatus('已送出資料，請至「掃碼」工作頁確認是否新增一列');
+          }, '*');
+          setStatus('資料已送出至主系統，視窗即將關閉...');
+          setTimeout(function() {
+            window.close();
+          }, 300);
+        } else {
+          setStatus('找不到主系統視窗，請手動切回原分頁');
+          isSending = false;
+        }
       } catch (err) {
-        setStatus('傳送失敗：' + (err && err.message ? err.message : err));
-      } finally {
+        setStatus('傳回主系統失敗：' + (err && err.message ? err.message : err));
         isSending = false;
-        setRescanVisible(true, false);
       }
     }
 
+    function cancelAndReturnPrev() {
+      stopCameraStream();
+      pendingDecodedText = '';
+      isSending = false;
+      setConfirmBtnEnabled(false);
+      setDecoded('尚未掃描');
+      setStatus('已取消掃碼，正在返回上一畫面...');
+
+      if (window.opener && !window.opener.closed) {
+        try {
+          window.opener.focus();
+        } catch (e) {}
+        window.close();
+      } else if (window.history.length > 1) {
+        window.history.back();
+      } else {
+        window.close();
+      }
+    }
+
+
+
+
+
+    window.addEventListener('message', function(event) {
+      if (!event || !event.data) return;
+      if (event.data.type === 'RESTART_CAMERA') {
+        initCamera();
+      } else if (event.data.type === 'STOP_CAMERA') {
+        stopCameraStream();
+      }
+    });
+
     window.addEventListener('DOMContentLoaded', initCamera);
     window.addEventListener('beforeunload', stopCameraStream);
+ 
   </script>
 </body>
 </html>
