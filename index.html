@@ -1,4 +1,4 @@
- <!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
   <meta charset="UTF-8">
@@ -582,13 +582,24 @@
         const statusEl = document.getElementById('statusText');
         const res = event.data.result || {};
         if (statusEl) {
-          if (res.status === 'success') {
-            statusEl.innerHTML =
-              '<div style="font-weight:900; color:#198754; font-size:15px;">✅ 盤點核銷成功！（自動準備掃下一支...）</div>' +
-              '<div style="font-size:13.5px; font-weight:bold; color:#202124;">' +
-                res.category + ' - ' + res.name + ' - ' + res.toolId +
-                '<br><span style="color:#6c757d; font-size:12px;">時間：' + res.scanTime + '</span>' +
-              '</div>';
+
+          
+if (res.status === 'success') {
+            if (res.isBorrowedItem) {
+              statusEl.innerHTML =
+                '<div style="font-weight:900; color:#084298; background:#cfe2ff; padding:6px 8px; border-radius:6px; font-size:15px; margin-bottom:4px;">📢 此工具已被借出！（標示：盤點到被借出之工具）</div>' +
+                '<div style="font-size:13.5px; font-weight:bold; color:#202124;">' +
+                  res.category + ' - ' + res.name + ' - ' + res.toolId +
+                  '<br><span style="color:#6c757d; font-size:12px;">時間：' + res.scanTime + '</span>' +
+                '</div>';
+            } else {
+              statusEl.innerHTML =
+                '<div style="font-weight:900; color:#198754; font-size:15px;">✅ 盤點核銷成功！（自動準備掃下一支...）</div>' +
+                '<div style="font-size:13.5px; font-weight:bold; color:#202124;">' +
+                  res.category + ' - ' + res.name + ' - ' + res.toolId +
+                  '<br><span style="color:#6c757d; font-size:12px;">時間：' + res.scanTime + '</span>' +
+                '</div>';
+            }
           } else if (res.status === 'already') {
             statusEl.innerHTML =
               '<div style="font-weight:900; color:#fd7e14; font-size:15px;">⚠️ 此工具今日已盤點過！（準備掃下一支...）</div>' +
@@ -644,5 +655,3 @@
   </script>
 </body>
 </html>
-
-
