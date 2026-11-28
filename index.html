@@ -215,7 +215,7 @@
 </head>
 <body>
 
-   <h3>即時鏡頭 QR-CODE 掃描</h3>
+   <h3 id="scanPageMainTitle">即時鏡頭 QR-CODE 掃描</h3>
 
   <div class="cam-box">
     <video id="camVideo" playsinline autoplay muted></video>
@@ -239,12 +239,18 @@
     <div id="decodedText">尚未掃描</div>
   </div>
 
-  <div class="action-btn-row">
+  <!-- 一般借還/轉移模式按鈕區（維持原樣） -->
+  <div id="normalActionBtnRow" class="action-btn-row">
     <button id="cancelScanBtn" type="button" class="btn-cancel-scan" onclick="cancelAndReturnPrev()">取消掃碼</button>
     <button id="confirmSendBtn" type="button" class="btn-confirm-send" onclick="confirmAndSendToGas()" disabled>確認送出</button>
   </div>
 
   <button id="rescanBtn" type="button" class="btn-rescan" style="display:none;" onclick="initCamera()">重新掃描</button>
+
+  <!-- 盤點模式專用按鈕區（網址帶 ?mode=inventory 時顯示） -->
+  <div id="inventoryActionBtnRow" class="action-btn-row" style="display:none;">
+    <button id="finishInventoryStageBtn" type="button" style="width: 100%; padding: 12px 10px; font-size: 16px; font-weight: 900; border-radius: 8px; background-color: #198754; color: #ffffff;" onclick="finishInventoryStageAndReturn()">✅ 完成本階段盤點（返回總表）</button>
+  </div>
 
 
 
@@ -269,6 +275,10 @@
     let isScanning = false;
     let isSending = false;
     let pendingDecodedText = '';
+    const isInventoryMode = (new URLSearchParams(window.location.search).get('mode') === 'inventory');
+
+
+
 
     function setConfirmBtnEnabled(enabled) {
       const btn = document.getElementById('confirmSendBtn');
@@ -437,18 +447,42 @@
     }
 
 
-    function handleDecoded(decodedText) {
+        function handleDecoded(decodedText) {
       if (isSending) return;
       stopCameraStream(true);
 
       const cleanText = String(decodedText || '').trim();
       pendingDecodedText = cleanText;
       setDecoded(cleanText, true);
+
+      const targetWin = window.opener || (window.parent !== window ? window.parent : null);
+
+      // 📦 分流 A：倉庫盤點模式（直接傳回 GAS 主系統寫入 InventoryCurrent 並準備連掃下一支）
+      if (isInventoryMode) {
+        isSending = true;
+        if (targetWin) {
+          setStatus('正在寫入盤點核銷紀錄... ⏳');
+          try {
+            targetWin.postMessage({
+              type: 'INVENTORY_SCAN_ITEM',
+              decodedText: cleanText
+            }, '*');
+          } catch (e) {
+            isSending = false;
+            setStatus('❌ 傳送至主系統失敗，1.5 秒後重啟鏡頭...');
+            setTimeout(initCamera, 1500);
+          }
+        } else {
+          isSending = false;
+          setStatus('❌ 找不到主系統視窗，請從盤點畫面重新點擊「進行盤點」');
+        }
+        return;
+      }
+
+      // 🔧 分流 B：原本借還/轉移/承接模式（完全維持原邏輯）
       setConfirmBtnEnabled(true);
       setRescanVisible(true, false);
 
-      // 向主系統查詢此 QR Code 對應的 Tools 工作頁資訊（工具分類、工具名稱、工具編號）
-      const targetWin = window.opener || (window.parent !== window ? window.parent : null);
       if (targetWin) {
         setStatus('掃描解析完成！正在核對工具資料... ⏳');
         try {
@@ -463,6 +497,23 @@
         setStatus('掃描解析完成！請核對上方內容後按下「確認送出」');
       }
     }
+
+    function finishInventoryStageAndReturn() {
+      stopCameraStream(false);
+      const targetWin = window.opener || (window.parent !== window ? window.parent : null);
+      if (targetWin && !targetWin.closed) {
+        try {
+          targetWin.postMessage({ type: 'INVENTORY_STAGE_DONE' }, '*');
+          targetWin.focus();
+        } catch (e) {}
+      }
+      window.close();
+    }
+
+    
+
+
+
 
 
 
@@ -518,14 +569,40 @@
 
 
 
-
-
     window.addEventListener('message', function(event) {
       if (!event || !event.data) return;
       if (event.data.type === 'RESTART_CAMERA') {
+        isSending = false;
         initCamera();
       } else if (event.data.type === 'STOP_CAMERA') {
         stopCameraStream();
+      } else if (event.data.type === 'INVENTORY_SCAN_RESULT') {
+        // 接收盤點核銷結果，顯示後自動重啟鏡頭連掃下一支
+        isSending = false;
+        const statusEl = document.getElementById('statusText');
+        const res = event.data.result || {};
+        if (statusEl) {
+          if (res.status === 'success') {
+            statusEl.innerHTML =
+              '<div style="font-weight:900; color:#198754; font-size:15px;">✅ 盤點核銷成功！（自動準備掃下一支...）</div>' +
+              '<div style="font-size:13.5px; font-weight:bold; color:#202124;">' +
+                res.category + ' - ' + res.name + ' - ' + res.toolId +
+                '<br><span style="color:#6c757d; font-size:12px;">時間：' + res.scanTime + '</span>' +
+              '</div>';
+          } else if (res.status === 'already') {
+            statusEl.innerHTML =
+              '<div style="font-weight:900; color:#fd7e14; font-size:15px;">⚠️ 此工具今日已盤點過！（準備掃下一支...）</div>' +
+              '<div style="font-size:13.5px; font-weight:bold; color:#202124;">' +
+                res.category + ' - ' + res.name + ' - ' + res.toolId +
+              '</div>';
+          } else {
+            statusEl.innerHTML =
+              '<div style="font-weight:900; color:#dc3545; font-size:14.5px;">❌ ' + (res.message || '查無此上架工具') + '</div>';
+          }
+        }
+        setTimeout(function() {
+          if (isInventoryMode) initCamera();
+        }, 1200);
       } else if (event.data.type === 'TOOL_INFO_RESULT') {
         // 確認回傳的是目前這筆剛掃描的條碼結果，避免非同步錯位
         if (event.data.decodedText !== pendingDecodedText) return;
@@ -547,9 +624,25 @@
     });
 
 
-    window.addEventListener('DOMContentLoaded', initCamera);
+    window.addEventListener('DOMContentLoaded', function() {
+      if (isInventoryMode) {
+        const titleEl = document.getElementById('scanPageMainTitle');
+        if (titleEl) titleEl.innerText = '📦 倉庫工具盤點掃碼';
+        const normalRow = document.getElementById('normalActionBtnRow');
+        if (normalRow) normalRow.style.display = 'none';
+        const invRow = document.getElementById('inventoryActionBtnRow');
+        if (invRow) invRow.style.display = 'flex';
+      }
+      initCamera();
+    });
     window.addEventListener('beforeunload', stopCameraStream);
- 
+
+
+
+
+
   </script>
 </body>
 </html>
+
+
